@@ -41,33 +41,54 @@ for msg in st.session_state.messages:
 
 # 接收用户输入
 if prompt := st.chat_input("请问关于财报的问题（例如：公司建议派发多少股息？）"):
-    # 1. 显示用户问题
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. 调用后端 SSE 接口并流式渲染
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
 
-        # 构造请求 URL
         url = f"http://127.0.0.1:8001/api/v1/rag/chat?query={prompt}&session_id={st.session_state.session_id}"
 
         try:
-            # 使用 stream=True 接收流式响应
             with requests.get(url, stream=True) as response:
                 response.raise_for_status()
                 for chunk in response.iter_content(chunk_size=None):
                     if chunk:
                         text = chunk.decode("utf-8")
                         full_response += text
-                        # 更新 UI，加上光标效果
-                        message_placeholder.markdown(full_response + "▌")
 
-            # 最终显示完整回答
-            message_placeholder.markdown(full_response)
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+                        # 如果包含元数据标记，先不显示元数据部分
+                        display_text = full_response.split("<<<SOURCES_METADATA>>>")[0]
+                        message_placeholder.markdown(display_text + "▌")
+
+            # 流式结束，解析元数据
+            pure_answer = full_response
+            sources_data = []
+
+            if "<<<SOURCES_METADATA>>>" in full_response:
+                parts = full_response.split("<<<SOURCES_METADATA>>>")
+                pure_answer = parts[0].strip()
+                meta_str = parts[1].replace("<<<END_METADATA>>>", "")
+                try:
+                    meta_json = json.loads(meta_str)
+                    sources_data = meta_json.get("sources", [])
+                except:
+                    pass
+
+            # 渲染最终纯文本回答
+            message_placeholder.markdown(pure_answer)
+
+            # 🌟 渲染引用来源折叠面板
+            if sources_data:
+                st.markdown("---")
+                st.markdown("📚 **本条回答的原文溯源：**")
+                for idx, source in enumerate(sources_data):
+                    with st.expander(f"📍 第 {source['page']} 页 原文片段"):
+                        st.info(source['content'])
+
+            st.session_state.messages.append({"role": "assistant", "content": pure_answer})
 
         except Exception as e:
             st.error(f"请求失败: {e}")

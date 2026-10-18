@@ -1,3 +1,5 @@
+import json
+
 from app.services.vector_store import vector_store
 from app.services.llm_client import get_llm_client
 from app.services.memory import chat_memory
@@ -32,49 +34,55 @@ class RAGChain:
         return rewritten
 
     async def generate_answer(self, query: str, session_id: str) -> AsyncGenerator[str, None]:
-        """带有记忆的流式生成"""
-
-        # 1. 获取历史记忆
         history_text = await chat_memory.get_history_text(session_id)
-
-        # 2. 查询改写
         rewritten_query = await self.rewrite_query(query, history_text)
 
-        # 3. 用改写后的 Query 去检索
         retrieved_docs = await vector_store.search(rewritten_query, top_k=3)
 
         if not retrieved_docs:
             yield "在财报库中没有找到相关内容。"
             return
 
-        # 4. 组装上下文
         context_str = ""
+        sources_data = []  # 👈 用于收集引用元数据
+
         for i, doc in enumerate(retrieved_docs):
             context_str += f"【第 {doc['page']} 页内容】\n{doc['parent_content']}\n\n"
+            # 收集元数据，去重（防止同一页被多次召回）
+            if not any(s['page'] == doc['page'] for s in sources_data):
+                sources_data.append({
+                    "page": doc["page"],
+                    "content": doc["parent_content"].strip()[:500] + "..."  # 截取前500字展示
+                })
 
-        # 5. 构造 Prompt (注意：把历史记忆也放进去，让大模型懂上下文)
-        prompt = f"""你是一个专业的财报分析师。请根据以下提供的财报信息，准确回答用户的问题。
-如果信息中找不到答案，请直接说“根据提供的财报片段，无法回答该问题”，绝不要编造数据。
-在回答时，请尽量在句末标注数据来源的页码（例如：[第3页]）。
+        prompt = f"""你是一个极其专业的财务分析师。请严格根据提供的财报片段回答用户问题。
+    注意：
+    1. 如果片段中找不到答案，直接说“根据现有财报片段，无法回答该问题”。
+    2. 不要自己编造数字。
+    3. 必须在回答的结尾标注数据来源的页码（如：[第{retrieved_docs[0]['page']}页]）。
 
-{history_text}
+    【财报信息】：
+    {context_str}
 
-【财报信息】：
-{context_str}
+    【历史对话】：
+    {history_text}
 
-【用户问题】：
-{query}
-"""
+    【用户问题】：
+    {query}
+    """
 
-        # 6. 流式生成并收集完整回答
         full_answer = ""
         async for chunk in self.llm.chat_stream(prompt):
             full_answer += chunk
             yield chunk
 
-        # 7. 对话结束后，把用户问题和AI回答存入 Redis
+        # 🌟 核心：流式输出结束后，发送一段特殊标记的元数据
+        # 前端通过识别这个标记，来渲染底部的“参考来源”面板
+        meta_packet = json.dumps({"sources": sources_data}, ensure_ascii=False)
+        yield f"\n\n<<<SOURCES_METADATA>>>{meta_packet}<<<END_METADATA>>>"
+
+        # 存入 Redis 时，去掉元数据部分，只存纯文本回答
         await chat_memory.add_message(session_id, "user", query)
         await chat_memory.add_message(session_id, "assistant", full_answer)
-
 
 rag_chain = RAGChain()
