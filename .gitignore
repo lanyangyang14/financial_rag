@@ -1,0 +1,21 @@
+# Python 虚拟环境
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 环境变量与密钥
+.env
+
+# 数据与日志
+data/
+logs/
+*.pdf
+
+# IDE 配置文件
+.idea/
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db

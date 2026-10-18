@@ -1,0 +1,56 @@
+
+
+# 建议加一个项目名前缀，这样在 docker ps 里看起来更清晰
+name: rag_project
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # 删除了 container_name，让 docker-compose 自动生成（如 rag_project-postgres-1）
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpassword
+      POSTGRES_DB: financial_rag
+    ports:
+      # 💡 修改点 1：以前 blog 占用了 5433，我们用 5432 作为外部端口
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      # 💡 修改点 2：如果 6379 被占用，我们换成 6380 映射到容器的 6379
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/adminpassword
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
+# 注意：这里定义的是数据卷，Docker 会加上项目前缀，比如 rag_project_pg_data，不会和 blog 的冲突
+volumes:
+  pg_data:
+  redis_data:
+  qdrant_data:
+  neo4j_data:
