@@ -8,39 +8,46 @@ from app.services.chunker import ParentChildChunker
 from app.services.vector_store import vector_store
 
 
-@celery_app.task(name="process_pdf_async")
-def process_pdf_async(file_path: str, document_id: str):
+@celery_app.task(name="process_pdf_async", bind=True)  # 👈 1. 加上 bind=True
+def process_pdf_async(self, file_path: str, document_id: str):  # 👈 2. 第一个参数变成 self
     print(f"[Celery] 开始处理文档: {document_id}，路径: {file_path}")
     try:
+        # 1. 解析
+        self.update_state(state='PROGRESS', meta={'current': 1, 'total': 3, 'msg': '正在解析 PDF...'})
         parser = FinancialPDFParser(file_path)
         pages = parser.extract_text_with_metadata()
         parser.close()
 
-        # 🌟 核心新增：遍历每一页，处理图片
+        # 2. 识别图片
+        total_images = sum(len(p["metadata"].get("image_paths", [])) for p in pages)
+        processed_images = 0
+
         for page in pages:
             image_paths = page["metadata"].get("image_paths", [])
-            if image_paths:
-                print(f"  -> 正在识别第 {page['page_number']} 页的 {len(image_paths)} 张图片...")
-                image_descriptions = ""
-                for img_path in image_paths:
-                    desc = vision_service.describe_image(img_path)
-                    if desc:
-                        image_descriptions += f"\n【图表描述】{desc}\n"
+            for img_path in image_paths:
+                desc = vision_service.describe_image(img_path)
+                if desc:
+                    page["content"] += f"\n【图表描述】{desc}\n"
 
-                # 把图片的描述追加到文本末尾，这样就能被向量化检索到了！
-                page["content"] += image_descriptions
+                processed_images += 1
+                # 🌟 每次处理完一张图，更新一次进度！
+                self.update_state(
+                    state='PROGRESS',
+                    meta={'current': processed_images, 'total': total_images,
+                          'msg': f'正在识别第{page["page_number"]}页图片'}
+                )
 
+        # 3. 切片
+        self.update_state(state='PROGRESS', meta={'current': 2, 'total': 3, 'msg': '正在切片...'})
         chunker = ParentChildChunker(child_chunk_size=300)
         chunks = chunker.split(pages)
-        # 3. 向量化入库
+
+        # 4. 向量化入库
+        self.update_state(state='PROGRESS', meta={'current': 3, 'total': 3, 'msg': '正在存入向量库...'})
+
         async def _ingest():
-            # 🌟 核心修改：每次入库前，确保集合存在（如果存在则跳过）
-            # 注意：我稍微改了一下 init_collection 的逻辑，防止每次上传都删库，看下面
             if not vector_store.qdrant.collection_exists(vector_store.collection_name):
                 vector_store.init_collection()
-            else:
-                print(f"ℹ️ Collection {vector_store.collection_name} 已存在，直接追加数据。")
-
             await vector_store.insert_chunks(chunks, document_id=document_id)
 
         asyncio.run(_ingest())
