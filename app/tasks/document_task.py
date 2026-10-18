@@ -1,5 +1,7 @@
 import os
 import asyncio
+
+from app.services.vision_service import vision_service
 from app.tasks.celery_app import celery_app
 from app.services.pdf_parser import FinancialPDFParser
 from app.services.chunker import ParentChildChunker
@@ -10,15 +12,26 @@ from app.services.vector_store import vector_store
 def process_pdf_async(file_path: str, document_id: str):
     print(f"[Celery] 开始处理文档: {document_id}，路径: {file_path}")
     try:
-        # 1. 解析
         parser = FinancialPDFParser(file_path)
         pages = parser.extract_text_with_metadata()
         parser.close()
 
-        # 2. 切片
+        # 🌟 核心新增：遍历每一页，处理图片
+        for page in pages:
+            image_paths = page["metadata"].get("image_paths", [])
+            if image_paths:
+                print(f"  -> 正在识别第 {page['page_number']} 页的 {len(image_paths)} 张图片...")
+                image_descriptions = ""
+                for img_path in image_paths:
+                    desc = vision_service.describe_image(img_path)
+                    if desc:
+                        image_descriptions += f"\n【图表描述】{desc}\n"
+
+                # 把图片的描述追加到文本末尾，这样就能被向量化检索到了！
+                page["content"] += image_descriptions
+
         chunker = ParentChildChunker(child_chunk_size=300)
         chunks = chunker.split(pages)
-
         # 3. 向量化入库
         async def _ingest():
             # 🌟 核心修改：每次入库前，确保集合存在（如果存在则跳过）
