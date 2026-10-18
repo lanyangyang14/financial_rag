@@ -6,7 +6,7 @@ from app.tasks.celery_app import celery_app
 from app.services.pdf_parser import FinancialPDFParser
 from app.services.chunker import ParentChildChunker
 from app.services.vector_store import vector_store
-
+from app.services.graph_service import graph_service
 
 @celery_app.task(name="process_pdf_async", bind=True)  # 👈 1. 加上 bind=True
 def process_pdf_async(self, file_path: str, document_id: str):  # 👈 2. 第一个参数变成 self
@@ -46,11 +46,29 @@ def process_pdf_async(self, file_path: str, document_id: str):  # 👈 2. 第一
         self.update_state(state='PROGRESS', meta={'current': 3, 'total': 3, 'msg': '正在存入向量库...'})
 
         async def _ingest():
-            if not vector_store.qdrant.collection_exists(vector_store.collection_name):
-                vector_store.init_collection()
-            await vector_store.insert_chunks(chunks, document_id=document_id)
+            # 🌟 关键：在事件循环内部导入和实例化，避免连接池复用引起的 Event loop closed
+            from app.services.vector_store import VectorStoreManager
+            from app.services.es_search import ESSearchService
+
+            v_store = VectorStoreManager()
+            es_store = ESSearchService()
+
+            if not v_store.qdrant.collection_exists(v_store.collection_name):
+                v_store.init_collection()
+
+            await es_store.init_index()
+
+            await v_store.insert_chunks(chunks, document_id=document_id)
+            await es_store.index_chunks(chunks, document_id=document_id)
 
         asyncio.run(_ingest())
+        # 4. 抽取知识图谱 (为了测试速度，我们只拿第一页的前 1000 个字去抽)
+        print("🕸️ 准备启动 GraphRAG 抽取任务...")
+        test_text = pages[0]["content"][:1000] if pages else ""
+        if test_text:
+            graph_service.extract_and_store(test_text)
+
+        print(f"[Celery] 文档处理及图谱抽取完成: {document_id}")
 
         print(f"[Celery] 文档处理完成: {document_id}")
         return {"status": "success", "chunks": len(chunks)}

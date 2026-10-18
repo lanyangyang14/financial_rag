@@ -1,0 +1,77 @@
+from elasticsearch import AsyncElasticsearch
+from typing import List, Dict, Any
+
+
+class ESSearchService:
+    def __init__(self):
+        # 连接本地 ES (默认端口 9200)
+        self.client = AsyncElasticsearch("http://localhost:9200")
+        self.index_name = "financial_chunks"
+
+    async def init_index(self):
+        """初始化 ES 索引结构"""
+        try:
+            # 尝试创建，如果不存在就创建
+            await self.client.indices.create(
+                index=self.index_name,
+                mappings={
+                    "properties": {
+                        "content": {"type": "text"},
+                        "page": {"type": "integer"},
+                        "document_id": {"type": "keyword"},
+                        "parent_content": {"type": "text"}
+                    }
+                }
+            )
+            print(f"✅ 已创建 Elasticsearch 索引: {self.index_name}")
+        except Exception as e:
+            # 如果报错是因为索引已经存在，那就忽略它
+            if "resource_already_exists_exception" in str(e):
+                print(f"ℹ️ Elasticsearch 索引 {self.index_name} 已存在，跳过创建。")
+            else:
+                print(f"⚠️ 创建 ES 索引时出错: {e}")
+
+    async def index_chunks(self, chunks: List[Dict[str, Any]], document_id: str):
+        """将切片批量写入 ES"""
+        operations = []
+        for i, chunk in enumerate(chunks):
+            # ES 的 bulk API 需要交替传入操作类型和数据
+            operations.append({"index": {"_index": self.index_name}})
+            operations.append({
+                "content": chunk["child_content"],
+                "page": chunk["metadata"]["page"],
+                "document_id": document_id,
+                "parent_content": chunk["parent_content"]
+            })
+
+        if operations:
+            await self.client.bulk(operations=operations)
+            # 强制刷新，让数据立刻可查
+            await self.client.indices.refresh(index=self.index_name)
+            print(f"🚀 成功存入 {len(chunks)} 个切片到 Elasticsearch！")
+
+    async def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """全文检索：精确匹配关键词"""
+        res = await self.client.search(
+            index=self.index_name,
+            query={
+                "match": {
+                    "content": query
+                }
+            },
+            size=top_k
+        )
+
+        results = []
+        for hit in res["hits"]["hits"]:
+            results.append({
+                "score": hit["_score"],
+                "page": hit["_source"]["page"],
+                "parent_content": hit["_source"]["parent_content"],
+                "document_id": hit["_source"]["document_id"]
+            })
+        return results
+
+
+# 全局实例
+#es_service = ESSearchService()

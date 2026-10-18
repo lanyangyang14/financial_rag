@@ -48,9 +48,38 @@ services:
       - neo4j_data:/data
     restart: unless-stopped
 
+
+# Elasticsearch (用于全文检索)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: rag_es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+
+  # Kibana (用于可视化查看 ES 数据，可选)
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: rag_kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
 # 注意：这里定义的是数据卷，Docker 会加上项目前缀，比如 rag_project_pg_data，不会和 blog 的冲突
 volumes:
   pg_data:
   redis_data:
   qdrant_data:
   neo4j_data:
+  es_data:
+
