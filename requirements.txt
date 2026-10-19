@@ -1,9 +1,39 @@
-fastapi==0.115.12
-uvicorn[standard]==0.34.0
-pydantic==2.10.6
-pydantic-settings==2.8.1
-python-dotenv==1.0.1
-openai==1.63.2
-httpx==0.28.1
-pymupdf==
-pdfplumber==
+# --- Web 框架与核心 ---
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-multipart
+python-dotenv
+
+# --- 异步任务与消息队列 ---
+celery
+redis
+
+# --- 大模型与 RAG 核心 ---
+openai
+llama-index
+llama-index-core
+llama-index-embeddings-openai
+llama-index-graph-stores-neo4j
+llama-index-llms-openai-like
+# 本地 Langfuse 服务端是 v2，SDK 必须用 v2 才会上报成功（v3+ 走 OTel，v2 服务端不支持）
+langfuse<3
+
+# --- 检索与数据库 ---
+qdrant-client
+elasticsearch==8.13.0
+psycopg2-binary
+neo4j
+SQLAlchemy
+
+# --- 文档解析与多模态 ---
+pymupdf
+pdfplumber
+sentence-transformers
+
+# --- 前端 (Streamlit) ---
+streamlit
+requests
+
+langgraph
+langchain-openai

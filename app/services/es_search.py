@@ -1,11 +1,13 @@
+import os
+
 from elasticsearch import AsyncElasticsearch
 from typing import List, Dict, Any
 
 
 class ESSearchService:
     def __init__(self):
-        # 连接本地 ES (默认端口 9200)
-        self.client = AsyncElasticsearch("http://localhost:9200")
+        es_url = os.getenv("ES_URL", "http://127.0.0.1:9200")
+        self.client = AsyncElasticsearch(es_url)
         self.index_name = "financial_chunks"
 
     async def init_index(self):
@@ -52,15 +54,21 @@ class ESSearchService:
 
     async def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """全文检索：精确匹配关键词"""
-        res = await self.client.search(
-            index=self.index_name,
-            query={
-                "match": {
-                    "content": query
-                }
-            },
-            size=top_k
-        )
+        from elasticsearch import NotFoundError
+        try:
+            res = await self.client.search(
+                index=self.index_name,
+                query={
+                    "match": {
+                        "content": query
+                    }
+                },
+                size=top_k
+            )
+        except NotFoundError:
+            # 索引还没建（还没上传过文档），返回空结果，不影响其他检索路径
+            print(f"ℹ️ ES 索引 {self.index_name} 不存在（尚未上传文档），跳过关键词检索")
+            return []
 
         results = []
         for hit in res["hits"]["hits"]:

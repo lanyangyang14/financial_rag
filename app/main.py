@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, UploadFile, File, Depends
 from fastapi.responses import StreamingResponse
 from celery.result import AsyncResult  # 👈 修正：引入 Celery 的 AsyncResult
+from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.services.llm_client import get_llm_client
 from app.services.rag_chain import rag_chain
+from app.services.real_agent import real_agent_app
 from app.tasks.celery_app import celery_app
 from app.tasks.document_task import process_pdf_async
 from app.core.database import init_db, get_db
@@ -103,3 +105,28 @@ async def get_task_status(task_id: str):
         response["error"] = str(task_result.info)
 
     return response
+
+
+@app.get("/api/v1/agent/chat")
+async def agent_chat_endpoint(query: str):
+    """基于 ReAct 状态机的智能体对话接口（流式展示思考过程）"""
+
+    async def event_generator():
+        inputs = {"messages": [HumanMessage(content=query)]}
+
+        # 使用 astream 流式获取智能体的每一步
+        async for event in real_agent_app.astream(inputs):
+            for node_name, state_data in event.items():
+                if "messages" in state_data:
+                    for msg in state_data["messages"]:
+                        # 如果大模型在思考并决定调用工具
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            yield f"🔍 思考中：准备调用 {msg.tool_calls[0]['name']} 查询数据...\n"
+                        # 如果是工具返回的结果
+                        elif msg.type == "tool":
+                            yield f"📊 数据返回：{str(msg.content)[:100]}...\n"
+                        # 如果是大模型的最终回答
+                        elif msg.content:
+                            yield msg.content + "\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

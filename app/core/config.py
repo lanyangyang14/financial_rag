@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6380/0"  # ✅ 加上 : str
     QDRANT_URL:str="http://localhost:6333"
     NEO4J_URL:str="bolt://localhost:7687"
-    NEo4J_USER:str="neo4j"
-    NEO4j_PASSWORD:str="adminpassword"
+    NEO4J_USER:str="neo4j"
+    NEO4J_PASSWORD:str="adminpassword"
 
     model_config=SettingsConfigDict(env_file=".env",env_file_encoding="utf-8",extra="ignore")
 

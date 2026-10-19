@@ -2,10 +2,14 @@ import streamlit as st
 import requests
 import json
 import time
+import os  # 👈 新增：用于读取环境变量
 
 # ================= 页面配置与初始化 =================
 st.set_page_config(page_title="智能财报分析助手", page_icon="📊", layout="wide")
 st.title("📊 智能财报分析助手 (RAG)")
+
+# 🌟 核心：动态获取 API 地址（默认本地开发，Docker 里会读取环境变量）
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8001")
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = "user_001"
@@ -28,7 +32,8 @@ with st.sidebar:
         if st.button("上传并解析") and uploaded_file is not None:
             files = {"files": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
             with st.spinner("正在上传至服务器..."):
-                response = requests.post("http://127.0.0.1:8001/api/v1/document/upload", files=files)
+                # 🌟 修改：使用动态地址
+                response = requests.post(f"{API_BASE_URL}/api/v1/document/upload", files=files)
 
             if response.status_code == 200:
                 data = response.json()["data"][0]
@@ -44,7 +49,8 @@ with st.sidebar:
         progress_bar = st.progress(0)
 
         # 每次页面刷新，向后端问一次最新状态
-        res = requests.get(f"http://127.0.0.1:8001/api/v1/document/task_status/{st.session_state.task_id}").json()
+        # 🌟 修改：使用动态地址
+        res = requests.get(f"{API_BASE_URL}/api/v1/document/task_status/{st.session_state.task_id}").json()
         status = res.get("status")
         st.session_state.task_status = status
 
@@ -97,7 +103,8 @@ if prompt := st.chat_input("请问关于财报的问题（例如：公司建议�
         message_placeholder = st.empty()
         full_response = ""
 
-        url = f"http://127.0.0.1:8001/api/v1/rag/chat?query={prompt}&session_id={st.session_state.session_id}"
+        # 🌟 修改：使用动态地址
+        url = f"{API_BASE_URL}/api/v1/rag/chat?query={prompt}&session_id={st.session_state.session_id}"
 
         try:
             with requests.get(url, stream=True) as response:

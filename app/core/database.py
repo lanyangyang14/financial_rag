@@ -2,9 +2,21 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from app.models.db_models import Base
+from app.core.config import settings
 
-# 🌟 终极形态：加上 ?sslmode=disable
-DATABASE_URL = "postgresql+psycopg2://admin:adminpassword@127.0.0.1:5434/financial_rag?sslmode=disable&client_encoding=utf8"
+# 🌟 从配置读取，兼容宿主机直连和容器内服务名
+POSTGRES_URL = settings.POSTGRES_URL
+# SQLAlchemy 需要指定 psycopg2 驱动
+if POSTGRES_URL.startswith("postgresql://"):
+    DATABASE_URL = POSTGRES_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+else:
+    DATABASE_URL = POSTGRES_URL
+
+# 补充连接参数
+if "?" in DATABASE_URL:
+    DATABASE_URL += "&sslmode=disable&client_encoding=utf8"
+else:
+    DATABASE_URL += "?sslmode=disable&client_encoding=utf8"
 
 engine = create_engine(
     DATABASE_URL,

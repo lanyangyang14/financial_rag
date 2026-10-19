@@ -19,3 +19,7 @@ logs/
 # 系统文件
 .DS_Store
 Thumbs.db
+# 忽略本地下载的模型数据
+models/
+*.bin
+*.safetensors

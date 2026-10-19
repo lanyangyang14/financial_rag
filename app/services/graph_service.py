@@ -13,9 +13,9 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 class GraphService:
     def __init__(self):
         self.graph_store = Neo4jPropertyGraphStore(
-            username="neo4j",
-            password="adminpassword",
-            url="bolt://localhost:7687",
+            username=app_settings.NEO4J_USER,
+            password=app_settings.NEO4J_PASSWORD,
+            url=app_settings.NEO4J_URL,
         )
 
         self.llm = OpenAILike(

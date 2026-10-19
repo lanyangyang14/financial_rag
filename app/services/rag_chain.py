@@ -1,6 +1,11 @@
 import json
 import os
+import re
 from typing import AsyncGenerator
+
+# 🌟 适配本地 Langfuse v2 服务端：v2 的装饰器 API 在 langfuse.decorators 下
+from langfuse import observe, get_client
+from langfuse import Langfuse
 
 from app.services.reranker import reranker_service
 from app.services.vector_store import vector_store
@@ -9,6 +14,16 @@ from app.services.graph_service import graph_service
 from app.services.fusion import reciprocal_rank_fusion
 from app.services.llm_client import get_llm_client
 from app.services.memory import chat_memory
+
+# 初始化 Langfuse（密钥你可以在 Langfuse 网页端获取并替换）
+langfuse = Langfuse(
+    public_key=os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-lf-1234567890"),
+    secret_key=os.environ.get("LANGFUSE_SECRET_KEY", "sk-lf-1234567890"),
+    host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000")
+)
+
+# 提前设置 HuggingFace 镜像，避免模型下载超时
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 
 class RAGChain:
@@ -35,7 +50,13 @@ class RAGChain:
         except Exception:
             return query
 
+    # 🌟 核心修复：装饰器下面不能有空行，必须紧贴函数
+    @observe(name="RAG_Answer_Generator")
     async def generate_answer(self, query: str, session_id: str) -> AsyncGenerator[str, None]:
+        # 🌟 v2 写法：往当前 trace 上挂 metadata
+        langfuse = get_client()
+        langfuse.update_current_span(metadata={"session_id": session_id})
+
         # 1. 获取历史与查询改写
         history_text = await chat_memory.get_history_text(session_id)
         rewritten_query = await self.rewrite_query(query, history_text)
@@ -62,8 +83,7 @@ class RAGChain:
             print(f"⚠️ 图谱检索跳过: {e}")
 
         print("--- 🧬 开始 RRF 融合 ---")
-        import re
-        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
         # 如果包含 3 个以上数字，或者长度很短，判定为精确查询
         is_precision_query = len(re.findall(r'\d+', rewritten_query)) >= 3 or len(rewritten_query) < 10
 
@@ -76,12 +96,13 @@ class RAGChain:
 
         # 5. RRF 融合（传入动态权重）
         fused_docs = reciprocal_rank_fusion([vector_docs, es_docs], weights=weights)
-        #截取 RRF 融合后的前 10 名，交给 Reranker 重新打分
+        # 截取 RRF 融合后的前 10 名，交给 Reranker 重新打分
         candidates = fused_docs[:10]
         print(f"🔄 准备重排的候选集大小: {len(candidates)}")
 
         # 🌟 核心：调用本地模型重排，直接取前 3 名
         top_docs = reranker_service.rerank(query=rewritten_query, docs=candidates, top_k=3)
+
         # 6. 组装上下文与溯源数据
         context_str = ""
         sources_data = []

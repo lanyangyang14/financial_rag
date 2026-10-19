@@ -1,4 +1,7 @@
 # app/services/reranker.py
+import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 from sentence_transformers import CrossEncoder
 
 
