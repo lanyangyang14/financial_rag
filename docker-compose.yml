@@ -12,8 +12,8 @@ services:
       POSTGRES_PASSWORD: adminpassword
       POSTGRES_DB: financial_rag
     ports:
-      # 💡 修改点 1：以前 blog 占用了 5433，我们用 5432 作为外部端口
-      - "5432:5432"
+      # 💡 修改点 1：本机安装的 PostgreSQL 18 服务占用了 5432，改用 5434 映射到容器内 5432
+      - "5434:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -52,7 +52,6 @@ services:
 # Elasticsearch (用于全文检索)
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
-    container_name: rag_es
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -66,9 +65,8 @@ services:
   # Kibana (用于可视化查看 ES 数据，可选)
   kibana:
     image: docker.elastic.co/kibana/kibana:8.13.0
-    container_name: rag_kibana
     ports:
-      - "5601:5601"
+      - "5602:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:

@@ -1,19 +1,33 @@
 import os
 import shutil
 import uuid
-from fastapi import FastAPI, Query, UploadFile, File
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Query, UploadFile, File, Depends
 from fastapi.responses import StreamingResponse
 from celery.result import AsyncResult  # 👈 修正：引入 Celery 的 AsyncResult
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.services.llm_client import get_llm_client
 from app.services.rag_chain import rag_chain
 from app.tasks.celery_app import celery_app
 from app.tasks.document_task import process_pdf_async
-
+from app.core.database import init_db, get_db
+from app.models.db_models import DocumentRecord
 # 👈 修正：彻底删掉 from app_ui import task_id
 
-app = FastAPI(title=settings.PROJECT_NAME)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动时执行的代码（替代 startup）
+    init_db()
+    print("✅ 数据库表初始化完成！")
+    yield
+    # 关闭时执行的代码（替代 shutdown，如果有的话）
+    pass
+
+# 👈 必须把 lifespan 传给 FastAPI，否则 init_db() 永远不会执行
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 @app.get("/")
 def read_root():
@@ -35,7 +49,7 @@ async def rag_chat_endpoint(
     )
 
 @app.post("/api/v1/document/upload")
-async def upload_documents(files: list[UploadFile] = File(...)):
+async def upload_documents(files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_db)): # 👈 注入数据库
     uploaded_results = []
     upload_dir = "data/uploads"
     os.makedirs(upload_dir, exist_ok=True)
@@ -47,13 +61,21 @@ async def upload_documents(files: list[UploadFile] = File(...)):
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 触发 Celery 任务，并拿到返回的 task 对象
+        # 🌟 关键修改：把文件记录存入 PostgreSQL
+        new_doc = DocumentRecord(
+            id=document_id,
+            filename=file.filename,
+            user_id="user_001" # 暂时写死，后续可以接用户登录体系
+        )
+        db.add(new_doc)
+        db.commit() # 提交到 PG
+
         task = process_pdf_async.delay(file_path, document_id)
 
         uploaded_results.append({
             "filename": file.filename,
             "document_id": document_id,
-            "task_id": task.id,  # 👈 修正：这里必须取 task.id，而不是 task_id 函数
+            "task_id": task.id,
             "status": "已提交后台处理"
         })
 

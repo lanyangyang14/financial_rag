@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     #数据库配置
     POSTGRES_URL: str = "postgresql://admin:adminpassword@localhost:5432/financial_rag"
-    REDIS_URL: str = "redis://localhost:6379/0"  # ✅ 加上 : str
+    REDIS_URL: str = "redis://localhost:6380/0"  # ✅ 加上 : str
     QDRANT_URL:str="http://localhost:6333"
     NEO4J_URL:str="bolt://localhost:7687"
     NEo4J_USER:str="neo4j"

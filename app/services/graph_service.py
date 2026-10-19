@@ -58,5 +58,26 @@ class GraphService:
             print(f"❌ [GraphRAG] 抽取失败: {e}")
             return False
 
+    def graph_search(self, query: str) -> str:
+        """从 Neo4j 中检索相关的图谱上下文"""
+        try:
+            # 从已有的图谱库加载索引
+            index = PropertyGraphIndex.from_existing(
+                property_graph_store=self.graph_store,
+                llm=self.llm,
+                embed_model=self.embed_model
+            )
+            # 使用图谱检索器
+            retriever = index.as_retriever(include_text=True)
+            nodes = retriever.retrieve(query)
+
+            # 拼接成文本
+            context = ""
+            for node in nodes:
+                context += f"{node.text}\n"
+            return context
+        except Exception as e:
+            print(f"⚠️ 图谱检索失败: {e}")
+            return ""
 
 graph_service = GraphService()
