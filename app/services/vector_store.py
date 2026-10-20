@@ -1,9 +1,8 @@
 import uuid
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
 from openai import AsyncOpenAI
 from app.core.config import settings
-
+from qdrant_client.models import Filter, FieldCondition, MatchValue, Distance, VectorParams, PointStruct
 
 class VectorStoreManager:
     def __init__(self):
@@ -34,7 +33,7 @@ class VectorStoreManager:
         )
         return response.data[0].embedding
 
-    async def insert_chunks(self, chunks: list[dict], document_id: str):
+    async def insert_chunks(self, chunks: list[dict], document_id: str,user_id:str):
         points = []
         for i, chunk in enumerate(chunks):
             child_text = chunk["child_content"]
@@ -45,7 +44,8 @@ class VectorStoreManager:
                 "parent_content": chunk["parent_content"],
                 "page": chunk["metadata"]["page"],
                 "source": chunk["metadata"]["source"],
-                "document_id": document_id
+                "document_id": document_id,
+                "user_id":user_id
             }
 
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{document_id}_{chunk['metadata']['page']}_{i}"))
@@ -62,14 +62,23 @@ class VectorStoreManager:
             self.qdrant.upsert(collection_name=self.collection_name, points=points)
             print(f"🚀 成功存入 {len(points)} 个向量切片到 Qdrant！")
 
-    async def search(self, query: str, top_k: int = 3) -> list[dict]:
+    async def search(self, query: str,user_id:str, top_k: int = 3) -> list[dict]:
         """基础 Dense 检索"""
         query_vector = await self.get_embedding(query)
         search_result = self.qdrant.query_points(
             collection_name=self.collection_name,
             query=query_vector,
+            query_filter=Filter(  # 🌟 核心过滤逻辑
+                must=[
+                    FieldCondition(
+                        key="user_id",
+                        match=MatchValue(value=user_id)
+                    )
+                ]
+            ),
             limit=top_k
         )
+
 
         results = []
         for hit in search_result.points:

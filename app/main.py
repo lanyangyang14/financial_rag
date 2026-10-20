@@ -3,10 +3,13 @@ import shutil
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, UploadFile, File, Depends
+from fastapi import FastAPI, Query, UploadFile, File, Depends,Request
 from fastapi.responses import StreamingResponse
 from celery.result import AsyncResult  # 👈 修正：引入 Celery 的 AsyncResult
 from langchain_core.messages import HumanMessage
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -31,6 +34,9 @@ async def lifespan(app: FastAPI):
 # 👈 必须把 lifespan 传给 FastAPI，否则 init_db() 永远不会执行
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @app.get("/")
 def read_root():
     return {"message": f"Welcome to {settings.PROJECT_NAME} API"}
@@ -41,17 +47,25 @@ async def chat_stream_endpoint(query: str, provider: str = "deepseek"):
     return StreamingResponse(llm.chat_stream(query), media_type="text/event-stream")
 
 @app.get("/api/v1/rag/chat")
+@limiter.limit("5/minute")
 async def rag_chat_endpoint(
+    request: Request,
     query: str = Query(..., description="用户关于财报的问题"),
-    session_id: str = Query("default_session", description="会话ID，用于区分不同用户的记忆")
+    session_id: str = Query("default_session", description="会话ID，用于区分不同用户的记忆"),
+    user_id:str=Query("user_001")
 ):
+    client_ip = request.client.host if request.client else "unknown"
+    print(f"📡 收到请求 - IP: {client_ip}, 用户: {user_id}, 问题: {query}")
     return StreamingResponse(
-        rag_chain.generate_answer(query, session_id),
+        rag_chain.generate_answer(query, session_id,user_id),
         media_type="text/event-stream"
     )
 
 @app.post("/api/v1/document/upload")
-async def upload_documents(files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_db)): # 👈 注入数据库
+@limiter.limit("3/minute")
+async def upload_documents(request:Request,files: list[UploadFile] = File(...), db: AsyncSession = Depends(get_db)): # 👈 注入数据库
+    client_ip = request.client.host if request.client else "unknown"
+    print(f"📁 收到文件上传请求 - IP: {client_ip}, 文件数: {len(files)}")
     uploaded_results = []
     upload_dir = "data/uploads"
     os.makedirs(upload_dir, exist_ok=True)
@@ -72,7 +86,7 @@ async def upload_documents(files: list[UploadFile] = File(...), db: AsyncSession
         db.add(new_doc)
         db.commit() # 提交到 PG
 
-        task = process_pdf_async.delay(file_path, document_id)
+        task = process_pdf_async.delay(file_path, document_id,user_id="user_001")
 
         uploaded_results.append({
             "filename": file.filename,

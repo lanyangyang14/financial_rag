@@ -10,10 +10,10 @@ async def search_financial_vectors(query: str) -> str:
     return "\n".join([d["parent_content"] for d in docs])
 
 @tool
-async def search_financial_keywords(query: str) -> str:
+async def search_financial_keywords(query: str,user_id:str) -> str:
     """当用户询问具体的财务数字（如收入、利润、股息率）或特定年份时，使用此工具进行精确匹配。"""
     es = ESSearchService()
-    docs = await es.search(query, top_k=3)
+    docs = await es.search(query,user_id,top_k=3)
     return "\n".join([d["parent_content"] for d in docs])
 
 @tool

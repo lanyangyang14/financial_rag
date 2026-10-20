@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: adminpassword
       POSTGRES_DB: financial_rag
     ports:
-      - "5434:5432"
+      - "5434:5432"   # 宿主机 5432 被本机 PostgreSQL 18 占用，必须映射 5434（与 .env 和运行中容器一致）
     volumes:
       - pg_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -17,7 +17,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6380:6379"
+      - "6380:6379"   # 与运行中容器及 .env 保持一致
     volumes:
       - redis_data:/data
     restart: unless-stopped

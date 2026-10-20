@@ -9,7 +9,7 @@ from app.services.vector_store import vector_store
 from app.services.graph_service import graph_service
 
 @celery_app.task(name="process_pdf_async", bind=True)  # 👈 1. 加上 bind=True
-def process_pdf_async(self, file_path: str, document_id: str):  # 👈 2. 第一个参数变成 self
+def process_pdf_async(self, file_path: str, document_id: str,user_id:str):  # 👈 2. 第一个参数变成 self
     print(f"[Celery] 开始处理文档: {document_id}，路径: {file_path}")
     try:
         # 1. 解析
@@ -21,13 +21,21 @@ def process_pdf_async(self, file_path: str, document_id: str):  # 👈 2. 第一
         # 2. 识别图片
         total_images = sum(len(p["metadata"].get("image_paths", [])) for p in pages)
         processed_images = 0
-
+        # 遍历每一页，处理图片（公式与表格）
         for page in pages:
             image_paths = page["metadata"].get("image_paths", [])
-            for img_path in image_paths:
-                desc = vision_service.describe_image(img_path)
-                if desc:
-                    page["content"] += f"\n【图表描述】{desc}\n"
+            if image_paths:
+                print(f"  -> 正在解析第 {page['page_number']} 页的 {len(image_paths)} 张图片/表格/公式...")
+                image_descriptions = ""
+                for img_path in image_paths:
+                    # 🌟 核心修改：调用专门解析公式和表格的方法，并设为 True
+                    desc = vision_service.parse_complex_pdf_image(img_path, is_formula_or_table=True)
+                    if desc:
+                        # 用特殊的标记包裹，方便大模型识别这是公式/表格
+                        image_descriptions += f"\n\n【解析出的复杂图表/公式】\n{desc}\n\n"
+
+                # 把解析出来的 LaTeX 和 Markdown 表格追加到当前页的文本中
+                page["content"] += image_descriptions
 
                 processed_images += 1
                 # 🌟 每次处理完一张图，更新一次进度！
@@ -58,8 +66,8 @@ def process_pdf_async(self, file_path: str, document_id: str):  # 👈 2. 第一
 
             await es_store.init_index()
 
-            await v_store.insert_chunks(chunks, document_id=document_id)
-            await es_store.index_chunks(chunks, document_id=document_id)
+            await v_store.insert_chunks(chunks, document_id=document_id,user_id=user_id)
+            await es_store.index_chunks(chunks, document_id=document_id,user_id=user_id)
 
         asyncio.run(_ingest())
         # 4. 抽取知识图谱 (为了测试速度，我们只拿第一页的前 1000 个字去抽)

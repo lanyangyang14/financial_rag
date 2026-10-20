@@ -21,7 +21,8 @@ class ESSearchService:
                         "content": {"type": "text"},
                         "page": {"type": "integer"},
                         "document_id": {"type": "keyword"},
-                        "parent_content": {"type": "text"}
+                        "parent_content": {"type": "text"},
+                        "user_id": {"type": "keyword"}
                     }
                 }
             )
@@ -33,7 +34,7 @@ class ESSearchService:
             else:
                 print(f"⚠️ 创建 ES 索引时出错: {e}")
 
-    async def index_chunks(self, chunks: List[Dict[str, Any]], document_id: str):
+    async def index_chunks(self, chunks: List[Dict[str, Any]], document_id: str,user_id:str):
         """将切片批量写入 ES"""
         operations = []
         for i, chunk in enumerate(chunks):
@@ -43,7 +44,8 @@ class ESSearchService:
                 "content": chunk["child_content"],
                 "page": chunk["metadata"]["page"],
                 "document_id": document_id,
-                "parent_content": chunk["parent_content"]
+                "parent_content": chunk["parent_content"],
+                "user_id":user_id
             })
 
         if operations:
@@ -52,15 +54,20 @@ class ESSearchService:
             await self.client.indices.refresh(index=self.index_name)
             print(f"🚀 成功存入 {len(chunks)} 个切片到 Elasticsearch！")
 
-    async def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    async def search(self, query: str, user_id:str,top_k: int = 5) -> List[Dict[str, Any]]:
         """全文检索：精确匹配关键词"""
         from elasticsearch import NotFoundError
         try:
             res = await self.client.search(
                 index=self.index_name,
                 query={
-                    "match": {
-                        "content": query
+                    "bool": {
+                        "must": [
+                            {"match": {"content": query}}
+                        ],
+                        "filter": [  # 🌟 ES 的过滤逻辑
+                            {"term": {"user_id": user_id}}
+                        ]
                     }
                 },
                 size=top_k

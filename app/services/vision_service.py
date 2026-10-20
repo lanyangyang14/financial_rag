@@ -4,19 +4,23 @@ import os
 
 class VisionService:
     def __init__(self):
-        self.ollama_url = "http://localhost:11434/api/generate"
-        self.model = "llava" # 你拉取的本地视觉模型
+        # 🌟 修复：容器内访问宿主机 Ollama 要用 host.docker.internal，从环境变量读取
+        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        self.ollama_url = base + "/api/generate"
+        self.model = "llava"
 
-    def describe_image(self, image_path: str) -> str:
-        """调用多模态模型生成图片描述"""
+    def parse_complex_pdf_image(self, image_path: str, is_formula_or_table: bool = True) -> str:
+        """调用多模态模型，专门针对财报中的公式和表格进行解析"""
         if not os.path.exists(image_path):
             return ""
 
-        # 读取图片并转 Base64
         with open(image_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode('utf-8')
 
-        prompt = "这是一份财务报表中的图片。请仔细分析图片内容。如果是折线图或柱状图，请说明它的标题、X轴和Y轴代表什么，以及数据趋势是什么。只输出描述，不要废话。"
+        if is_formula_or_table:
+            prompt = "你是一个专业的财务文档解析专家。请识别图片中的内容。如果是数学公式，请必须使用 LaTeX 格式输出（用 $$ 包裹）。如果是表格，请转换为一模一样的 Markdown 表格格式。不要输出任何多余的解释，只输出转换后的结果。"
+        else:
+            prompt = "请描述图片内容。"
 
         payload = {
             "model": self.model,
@@ -26,7 +30,8 @@ class VisionService:
         }
 
         try:
-            response = requests.post(self.ollama_url, json=payload, timeout=60)
+            # 无 GPU 时 llava 跑 CPU 较慢，超时调大避免公式/表格解析被掐断返回空
+            response = requests.post(self.ollama_url, json=payload, timeout=600)
             if response.status_code == 200:
                 return response.json().get("response", "").strip()
             return ""

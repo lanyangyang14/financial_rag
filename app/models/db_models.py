@@ -21,6 +21,7 @@ class ChatHistory(Base):
     __tablename__ = 'chat_histories'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id=Column(String, index=True)
     session_id = Column(String, index=True)
     role = Column(String)  # user 或 assistant
     content = Column(Text)

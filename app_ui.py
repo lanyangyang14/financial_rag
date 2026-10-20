@@ -114,7 +114,7 @@ if prompt := st.chat_input("请问关于财报的问题（例如：公司建议�
                         text = chunk.decode("utf-8")
                         full_response += text
                         display_text = full_response.split("<<<SOURCES_METADATA>>>")[0]
-                        message_placeholder.markdown(display_text + "▌")
+                        message_placeholder.markdown(display_text + "▌", unsafe_allow_html=True)
 
             pure_answer = full_response
             sources_data = []
@@ -127,7 +127,7 @@ if prompt := st.chat_input("请问关于财报的问题（例如：公司建议�
                 except:
                     pass
 
-            message_placeholder.markdown(pure_answer)
+            message_placeholder.markdown(pure_answer, unsafe_allow_html=True)
 
             if sources_data:
                 st.markdown("---")

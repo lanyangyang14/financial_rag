@@ -3,8 +3,9 @@ import os
 import re
 from typing import AsyncGenerator
 
-# 🌟 适配本地 Langfuse v2 服务端：v2 的装饰器 API 在 langfuse.decorators 下
-from langfuse import observe, get_client
+# 🌟 适配本地 Langfuse v2 服务端：observe/langfuse_context 在 langfuse.decorators 下
+# （v2 没有 get_client，那是 v3+ 的 API，装了 v2 SDK 会 ImportError）
+from langfuse.decorators import observe, langfuse_context
 from langfuse import Langfuse
 
 from app.services.reranker import reranker_service
@@ -52,13 +53,13 @@ class RAGChain:
 
     # 🌟 核心修复：装饰器下面不能有空行，必须紧贴函数
     @observe(name="RAG_Answer_Generator")
-    async def generate_answer(self, query: str, session_id: str) -> AsyncGenerator[str, None]:
+    async def generate_answer(self, query: str, session_id: str,user_id:str) -> AsyncGenerator[str, None]:
         # 🌟 v2 写法：往当前 trace 上挂 metadata
-        langfuse = get_client()
-        langfuse.update_current_span(metadata={"session_id": session_id})
+        # 🌟 v2 写法：langfuse_context 挂 metadata 到当前 trace
+        langfuse_context.update_current_trace(metadata={"session_id": session_id, "user_id": user_id})
 
         # 1. 获取历史与查询改写
-        history_text = await chat_memory.get_history_text(session_id)
+        history_text = await chat_memory.get_history_text(session_id, user_id)
         rewritten_query = await self.rewrite_query(query, history_text)
         if rewritten_query != query:
             print(f"🔄 查询改写: [{query}] -> [{rewritten_query}]")
@@ -66,12 +67,12 @@ class RAGChain:
         print("--- 🚀 开始三路检索 ---")
 
         # 第一路
-        vector_docs = await vector_store.search(rewritten_query, top_k=5)
+        vector_docs = await vector_store.search(rewritten_query,user_id,top_k=5)
         print(f"📡 [Qdrant] 向量检索找到 {len(vector_docs)} 条相关片段")
 
         # 第二路
         es_service = ESSearchService()
-        es_docs = await es_service.search(rewritten_query, top_k=5)
+        es_docs = await es_service.search(rewritten_query,user_id,top_k=5)
         print(f"🔍 [Elasticsearch] 关键词检索找到 {len(es_docs)} 条相关片段")
 
         # 第三路
@@ -150,8 +151,8 @@ class RAGChain:
         yield f"\n\n<<<SOURCES_METADATA>>>{meta_packet}<<<END_METADATA>>>"
 
         # 10. 存入记忆 (Redis 和 SQLite/PG)
-        await chat_memory.add_message(session_id, "user", query)
-        await chat_memory.add_message(session_id, "assistant", full_answer)
+        await chat_memory.add_message(user_id,session_id, "user", query)
+        await chat_memory.add_message(user_id,session_id, "assistant", full_answer)
 
 
 rag_chain = RAGChain()
