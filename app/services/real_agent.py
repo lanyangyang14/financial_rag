@@ -1,6 +1,6 @@
-import os
+import json
 from typing import TypedDict, Annotated, Sequence, Literal
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -8,74 +8,142 @@ from app.core.config import settings
 from app.services.agent_tools import financial_tools
 
 
-# 1. 升级状态：加入“迭代次数”和“上一次调用的工具”
+# ================= 1. 定义复杂的状态机（共享黑板） =================
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], lambda x, y: x + y]
-    iterations: int  # 🌟 记录思考循环的次数
-    last_tool: str  # 🌟 记录上一次调用的工具名
+    research_data: str  # 🌟 共享黑板：存放执行者查到的原始数据
+    feedback: str  # 🌟 共享黑板：存放审查者的修改意见
+    iterations: int  # 防止死循环
+    next_actor: str  # 决定下一个谁上场
 
 
-# 2. 初始化大模型并绑定工具
-llm = ChatOpenAI(
-    model="deepseek-chat",
-    api_key=settings.DEEPSEEK_API_KEY,
-    base_url=settings.DEEPSEEK_BASE_URL,
-    temperature=0
-).bind_tools(financial_tools)
+# ================= 2. 初始化带工具的大模型 =================
+# 只有 Executor 拥有工具权限，主管和审查者只有大脑
+base_llm = ChatOpenAI(model="deepseek-chat", api_key=settings.DEEPSEEK_API_KEY, base_url=settings.DEEPSEEK_BASE_URL,
+                      temperature=0)
+llm_with_tools = base_llm.bind_tools(financial_tools)
 
 
-# 3. 核心思考节点
-def agent_reasoning_node(state: AgentState):
-    print(f"🧠 [Agent 思考中... 当前迭代: {state.get('iterations', 0)}]")
-    messages = state["messages"]
-    response = llm.invoke(messages)
+# ================= 3. 核心节点定义 =================
 
-    # 累加迭代次数
-    current_iter = state.get("iterations", 0) + 1
-    return {"messages": [response], "iterations": current_iter}
+def supervisor_node(state: AgentState):
+    """👑 主管节点：统筹全局，决定何时结束，并带有防死循环熔断"""
+    print("👑 [Supervisor 正在统筹全局...]")
 
-
-# 4. 升级路由判断节点：加入防御和熔断机制
-def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
-    messages = state["messages"]
-    last_message = messages[-1]
+    # 🌟 核心修复 1：最大迭代次数限制（强制熔断）
     iterations = state.get("iterations", 0)
-
-    # 🚨 熔断机制 1：最大迭代次数限制（默认 5 次，防止恶意消耗）
     if iterations >= 5:
-        print("🚨 [触发熔断] 达到最大迭代次数，强制结束！")
-        fallback_msg = AIMessage(
-            content="抱歉，我尝试了多次检索，但未能从当前财报中获取足够的信息。为了避免给您错误的数据，我停止了搜索。请尝试换个问法或提供更具体的指标名称。")
+        print(f"🚨 [触发熔断] 迭代次数达到 {iterations}，Agent 陷入死循环！强制终止。")
+        # 既然查不到，给用户一个体面的兜底回答
+        fallback_answer = "抱歉，经过多次检索和核实，当前的财报库中未能找到足够的信息来准确回答您的问题。请尝试提供更精确的财务指标或检查文档是否已成功上传入库。"
+        return {
+            "messages": [AIMessage(content=fallback_answer)],
+            "next_actor": "END"
+        }
+
+    messages = state["messages"]
+
+    # 🌟 核心修复 2：判断是否已经 PASS
+    if not state.get("feedback"):
+        return {"next_actor": "executor"}
+
+    if "PASS" in state.get("feedback", ""):
+        print("✅ [Supervisor 收到 PASS 批准，准备输出]")
+        return {"next_actor": "END"}
+    else:
+        print(f"⚠️ [Supervisor 收到 Critic 修改建议，打回给 Executor (当前迭代: {iterations})]")
+        return {"next_actor": "executor"}
+def executor_node(state: AgentState):
+    """🛠️ 执行者节点：调工具，干活"""
+    print("🛠️ [Executor 正在查阅财报并提取数据...]")
+    messages = state["messages"]
+
+    sys_prompt = SystemMessage(content="""你是一个底层财务数据提取员。请根据用户的需求或审查者的反馈，使用你的工具（查向量/查关键词）获取最准确的数据。
+你只需输出你查到的核心数据和引用的页码，不要做多余的分析。""")
+
+    response = llm_with_tools.invoke([sys_prompt] + list(messages))
+
+    # 把查到的核心数据存入共享黑板
+    return {
+        "messages": [response],
+        "research_data": response.content,
+        "next_actor": "critic",
+        "iterations": state.get("iterations", 0) + 1
+    }
+
+
+def critic_node(state: AgentState):
+    """🧐 审查者节点：结构化的冲突仲裁"""
+    print("🧐 [Critic 正在对数据做合规与准确性审查...]")
+    research_data = state.get("research_data", "")
+    user_query = state["messages"][0].content
+
+    prompt = f"""你是极其严苛的首席财务审查员。
+用户的问题是：{user_query}
+执行者查到的数据是：{research_data}
+
+请审查该数据是否准确回答了问题、是否包含页码。
+你必须输出纯 JSON 格式（不要 Markdown 标记）：
+{{
+    "result": "PASS" 或 "REJECT",
+    "reason": "如果打回，说明缺了什么数据；如果通过，说明理由",
+    "final_answer": "如果 PASS，请直接写出给用户的最终格式化回答（含引用页码）"
+}}
+"""
+    response = base_llm.invoke([SystemMessage(content=prompt)])
+
+    # 解析审查结果
+    try:
+        res_json = json.loads(response.content)
+        result = res_json.get("result")
+        reason = res_json.get("reason")
+        final_answer = res_json.get("final_answer", "")
+    except:
+        # 兜底：如果大模型不按 JSON 输出
+        result = "PASS"
+        reason = "解析失败，默认通过"
+        final_answer = research_data
+
+    print(f"   └─ 裁决结果: {result} | 理由: {reason}")
+
+    # 如果通过，把最终回答塞进 messages；如果打回，把反馈存入黑板
+    messages = []
+    if result == "PASS":
+        messages.append(AIMessage(content=final_answer))
+
+    return {
+        "messages": messages,
+        "feedback": f"{result}: {reason}",
+        "next_actor": "supervisor"
+    }
+
+
+# ================= 4. 构建图网络 =================
+def route_supervisor(state: AgentState) -> Literal["executor", "__end__"]:
+    if state.get("next_actor") == "END":
         return "__end__"
+    return "executor"
 
-    # 判断是否要调用工具
-    if last_message.tool_calls:
-        current_tool = last_message.tool_calls[0]['name']
-        current_args = str(last_message.tool_calls[0]['args'])
 
-        # 🚨 熔断机制 2：连续重复调用检测
-        # 如果上一次调用的工具和参数完全一样（说明它原地踏步了）
-        if state.get("last_tool") == f"{current_tool}_{current_args}":
-            print(f"🚨 [触发熔断] 检测到重复调用工具 {current_tool}，强制结束！")
-            return "__end__"
-
-        # 记录本次调用的指纹，传给下一轮
-        state["last_tool"] = f"{current_tool}_{current_args}"
-        print(f"🛠️ [Agent 决定行动]: 调用 {current_tool}")
+def route_executor(state: AgentState) -> Literal["tools", "critic"]:
+    # 如果执行者决定调用工具，去 tools 节点；否则直接去审查者
+    last_msg = state["messages"][-1]
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         return "tools"
-
-    print("✅ [Agent 思考完毕，准备输出最终回答]")
-    return "__end__"
+    return "critic"
 
 
-# 5. 构建图
 workflow = StateGraph(AgentState)
-workflow.add_node("agent", agent_reasoning_node)
-workflow.add_node("tools", ToolNode(financial_tools))
+workflow.add_node("supervisor", supervisor_node)
+workflow.add_node("executor", executor_node)
+workflow.add_node("critic", critic_node)
+workflow.add_node("tools", ToolNode(financial_tools))  # 🌟 真正执行工具的地方
 
-workflow.set_entry_point("agent")
-workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "__end__": END})
-workflow.add_edge("tools", "agent")
+workflow.set_entry_point("supervisor")
 
-# 编译应用
-real_agent_app = workflow.compile()
+workflow.add_conditional_edges("supervisor", route_supervisor, {"executor": "executor", "__end__": END})
+workflow.add_conditional_edges("executor", route_executor, {"tools": "tools", "critic": "critic"})
+workflow.add_edge("tools", "executor")  # 工具执行完，把结果还给执行者
+workflow.add_edge("critic", "supervisor")  # 审查完，交还主管决定生死
+
+multi_agent_app = workflow.compile()

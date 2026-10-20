@@ -4,16 +4,16 @@ from app.services.es_search import ESSearchService
 from app.services.graph_service import graph_service
 
 @tool
-async def search_financial_vectors(query: str) -> str:
+async def search_financial_vectors(query: str,user_id:str="user_001") -> str:
     """当用户询问财报中的具体概念、业务描述、战略规划时，使用此工具进行语义检索。"""
-    docs = await vector_store.search(query, top_k=3)
+    docs = await vector_store.search(query,user_id=user_id,top_k=3)
     return "\n".join([d["parent_content"] for d in docs])
 
 @tool
 async def search_financial_keywords(query: str,user_id:str) -> str:
     """当用户询问具体的财务数字（如收入、利润、股息率）或特定年份时，使用此工具进行精确匹配。"""
     es = ESSearchService()
-    docs = await es.search(query,user_id,top_k=3)
+    docs = await es.search(query,user_id=user_id,top_k=3)
     return "\n".join([d["parent_content"] for d in docs])
 
 @tool
