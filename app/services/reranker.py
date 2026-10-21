@@ -1,37 +1,49 @@
-# app/services/reranker.py
+import httpx
 import os
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-
-from sentence_transformers import CrossEncoder
 
 
 class RerankerService:
     def __init__(self):
-        print("⏳ 正在加载 BGE-Reranker 模型，首次运行会下载...")
-        # 使用智源的 BGE 重排模型
-        self.model = CrossEncoder('BAAI/bge-reranker-base')
-        print("✅ Reranker 模型加载完成！")
+        # 在 Docker 内部调用容器名 reranker-service，在本地测试调用 localhost:8080
+        self.api_url = os.getenv("RERANKER_URL", "http://localhost:8080/rerank")
 
     def rerank(self, query: str, docs: list[dict], top_k: int = 3) -> list[dict]:
-        """对召回的结果进行精准重排"""
         if not docs:
             return []
 
-        # 构造 (query, text) 的配对
-        pairs = [[query, doc.get("parent_content", "")] for doc in docs]
+        texts = [doc.get("parent_content", "") for doc in docs]
 
-        # 模型打分
-        scores = self.model.predict(pairs)
+        # 构造 TEI 要求的请求体
+        payload = {
+            "query": query,
+            "texts": texts,
+            "raw_scores": False,  # 返回 0-1 的归一化分数
+            "truncate": True
+        }
 
-        # 将分数附加到文档上并排序
-        for i, doc in enumerate(docs):
-            doc["rerank_score"] = float(scores[i])
+        try:
+            # 同步请求（因为 LangGraph/Celery 任务里可以直接用）
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(self.api_url, json=payload)
+                response.raise_for_status()
+                results = response.json()
 
-        sorted_docs = sorted(docs, key=lambda x: x["rerank_score"], reverse=True)
+            # 解析结果并重排
+            scored_docs = []
+            for idx, item in enumerate(results):
+                doc = docs[item["index"]]
+                doc["rerank_score"] = item["score"]
+                scored_docs.append(doc)
 
-        print(f"🎯 Rerank 重排完成，最高分: {sorted_docs[0]['rerank_score']:.4f}")
-        return sorted_docs[:top_k]
+            sorted_docs = sorted(scored_docs, key=lambda x: x["rerank_score"], reverse=True)
+            print(f"🎯 分布式 Rerank 完成，最高分: {sorted_docs[0]['rerank_score']:.4f}")
+            return sorted_docs[:top_k]
+
+        except Exception as e:
+            # 🌟 企业级容错：如果重排服务挂了，直接返回原始顺序的前 top_k 个
+            print(f"⚠️ Rerank 服务调用失败，降级为直接返回: {e}")
+            return docs[:top_k]
 
 
-# 全局实例（延迟加载，避免启动太慢）
+# 全局实例
 reranker_service = RerankerService()

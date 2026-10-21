@@ -33,7 +33,7 @@ class VectorStoreManager:
         )
         return response.data[0].embedding
 
-    async def insert_chunks(self, chunks: list[dict], document_id: str,user_id:str):
+    async def insert_chunks(self, chunks: list[dict], document_id: str,user_id:str,chunk_type:str="text"):
         points = []
         for i, chunk in enumerate(chunks):
             child_text = chunk["child_content"]
@@ -45,7 +45,8 @@ class VectorStoreManager:
                 "page": chunk["metadata"]["page"],
                 "source": chunk["metadata"]["source"],
                 "document_id": document_id,
-                "user_id":user_id
+                "user_id":user_id,
+                "chunk_type":chunk_type
             }
 
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{document_id}_{chunk['metadata']['page']}_{i}"))
@@ -62,24 +63,36 @@ class VectorStoreManager:
             self.qdrant.upsert(collection_name=self.collection_name, points=points)
             print(f"🚀 成功存入 {len(points)} 个向量切片到 Qdrant！")
 
-    async def search(self, query: str,user_id:str, top_k: int = 3) -> list[dict]:
-        """基础 Dense 检索"""
+    async def search(self, query: str, user_id: str, top_k: int = 5, chunk_type: str = None) -> list[dict]:
+        """基础 Dense 检索（支持按用户和类型过滤）"""
         query_vector = await self.get_embedding(query)
+
+        # 1. 构造必选过滤条件：必须属于该用户
+        must_conditions = [
+            FieldCondition(
+                key="user_id",
+                match=MatchValue(value=user_id)
+            )
+        ]
+
+        # 2. 如果传了 chunk_type（比如 "summary"），就追加过滤条件
+        if chunk_type:
+            must_conditions.append(
+                FieldCondition(
+                    key="chunk_type",
+                    match=MatchValue(value=chunk_type)
+                )
+            )
+
+        # 3. 统一发起一次检索
         search_result = self.qdrant.query_points(
             collection_name=self.collection_name,
             query=query_vector,
-            query_filter=Filter(  # 🌟 核心过滤逻辑
-                must=[
-                    FieldCondition(
-                        key="user_id",
-                        match=MatchValue(value=user_id)
-                    )
-                ]
-            ),
+            query_filter=Filter(must=must_conditions),  # 👈 把组装好的条件传进去
             limit=top_k
         )
 
-
+        # 4. 解析结果
         results = []
         for hit in search_result.points:
             results.append({

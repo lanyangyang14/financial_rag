@@ -23,3 +23,8 @@ Thumbs.db
 models/
 *.bin
 *.safetensors
+# 忽略本地测试和巨大的模型包
+start.bat
+torch_wheels/
+*.whl
+*.db

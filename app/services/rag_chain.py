@@ -2,12 +2,10 @@ import json
 import os
 import re
 from typing import AsyncGenerator
-
-# 🌟 适配本地 Langfuse v2 服务端：observe/langfuse_context 在 langfuse.decorators 下
-# （v2 没有 get_client，那是 v3+ 的 API，装了 v2 SDK 会 ImportError）
-from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client, propagate_attributes
 from langfuse import Langfuse
 
+from app.services.guardrails import guardrails
 from app.services.reranker import reranker_service
 from app.services.vector_store import vector_store
 from app.services.es_search import ESSearchService
@@ -15,21 +13,21 @@ from app.services.graph_service import graph_service
 from app.services.fusion import reciprocal_rank_fusion
 from app.services.llm_client import get_llm_client
 from app.services.memory import chat_memory
+from app.services.query_router import router  # 🌟 引入极速路由器
 
-# 初始化 Langfuse（密钥你可以在 Langfuse 网页端获取并替换）
 langfuse = Langfuse(
     public_key=os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-lf-1234567890"),
     secret_key=os.environ.get("LANGFUSE_SECRET_KEY", "sk-lf-1234567890"),
     host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000")
 )
 
-# 提前设置 HuggingFace 镜像，避免模型下载超时
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 
 class RAGChain:
     def __init__(self):
         self.llm = get_llm_client("deepseek")
+        self.es_service = ESSearchService()  # 初始化一次，复用实例
 
     async def rewrite_query(self, query: str, history_text: str) -> str:
         """多轮对话查询改写"""
@@ -51,84 +49,107 @@ class RAGChain:
         except Exception:
             return query
 
-    # 🌟 核心修复：装饰器下面不能有空行，必须紧贴函数
     @observe(name="RAG_Answer_Generator")
-    async def generate_answer(self, query: str, session_id: str,user_id:str) -> AsyncGenerator[str, None]:
-        # 🌟 v2 写法：往当前 trace 上挂 metadata
-        # 🌟 v2 写法：langfuse_context 挂 metadata 到当前 trace
-        langfuse_context.update_current_trace(metadata={"session_id": session_id, "user_id": user_id})
+    async def generate_answer(self, query: str, session_id: str, user_id: str) -> AsyncGenerator[str, None]:
+        # 🌟 第一关：输入安检
+        is_safe, error_msg = await guardrails.check_input(query)
+        if not is_safe:
+            print(f"🚫 [安全拦截] {error_msg}")
+            yield error_msg
+            return  # 直接断开，不查数据库，不调大模型
 
-        # 1. 获取历史与查询改写
-        history_text = await chat_memory.get_history_text(session_id, user_id)
-        rewritten_query = await self.rewrite_query(query, history_text)
-        if rewritten_query != query:
-            print(f"🔄 查询改写: [{query}] -> [{rewritten_query}]")
+        # 🌟 v4 写法：用 propagate_attributes 设置 session_id 和 user_id
 
-        print("--- 🚀 开始三路检索 ---")
+        with propagate_attributes(
+                session_id=session_id,
+                user_id=user_id
+        ):
 
-        # 第一路
-        vector_docs = await vector_store.search(rewritten_query,user_id,top_k=5)
-        print(f"📡 [Qdrant] 向量检索找到 {len(vector_docs)} 条相关片段")
+            # 1. 获取历史与查询改写
+            history_text = await chat_memory.get_history_text(session_id, user_id)
+            rewritten_query = await self.rewrite_query(query, history_text)
+            if rewritten_query != query:
+                print(f"🔄 查询改写: [{query}] -> [{rewritten_query}]")
 
-        # 第二路
-        es_service = ESSearchService()
-        es_docs = await es_service.search(rewritten_query,user_id,top_k=5)
-        print(f"🔍 [Elasticsearch] 关键词检索找到 {len(es_docs)} 条相关片段")
+            # ================= 🌟 核心改造：智能路由分发 =================
+            route_type = router.route(rewritten_query)
+            print(f"🚦 [智能路由] 意图识别: [{route_type}] | 问题: {rewritten_query}")
 
-        # 第三路
-        graph_context = ""
-        try:
-            graph_context = graph_service.graph_search(rewritten_query)
-            print(f"🕸️ [Neo4j] 图谱检索找到 {len(graph_context)} 个字符的上下文")
-        except Exception as e:
-            print(f"⚠️ 图谱检索跳过: {e}")
+            vector_docs = []
+            es_docs = []
+            graph_context = ""
+            context_str = ""
 
-        print("--- 🧬 开始 RRF 融合 ---")
+            if route_type == "direct":
+                print("⚡ 闲聊模式：跳过所有数据库检索")
+                # context_str 保持为空，大模型会直接根据自身知识回答
+            elif route_type == "macro_summary":
+                print("🌍 宏观模式：仅检索全局摘要块")
+                # 🌟 强制只检索 chunk_type="summary" 的数据
+                vector_docs = await vector_store.search(rewritten_query, user_id=user_id, top_k=5, chunk_type="summary")
 
-        # 如果包含 3 个以上数字，或者长度很短，判定为精确查询
-        is_precision_query = len(re.findall(r'\d+', rewritten_query)) >= 3 or len(rewritten_query) < 10
+            elif route_type == "keyword":
+                print("🎯 精确模式：仅查询 Elasticsearch")
+                es_docs = await self.es_service.search(rewritten_query, user_id=user_id, top_k=5)
 
-        if is_precision_query:
-            print("⚖️ 识别为精确查询，提高 Elasticsearch 权重")
-            weights = [0.5, 1.5]  # ES 权重大
-        else:
-            print("⚖️ 识别为语义查询，提高 Qdrant 权重")
-            weights = [1.5, 0.5]  # Qdrant 权重大
+            elif route_type == "semantic":
+                print("🧠 语义模式：仅查询 Qdrant")
+                vector_docs = await vector_store.search(rewritten_query, user_id=user_id, top_k=5)
 
-        # 5. RRF 融合（传入动态权重）
-        fused_docs = reciprocal_rank_fusion([vector_docs, es_docs], weights=weights)
-        # 截取 RRF 融合后的前 10 名，交给 Reranker 重新打分
-        candidates = fused_docs[:10]
-        print(f"🔄 准备重排的候选集大小: {len(candidates)}")
+            elif route_type == "hybrid":
+                print("🕸️ 复杂模式：三路并发检索 (Qdrant + ES + Neo4j)")
+                vector_docs = await vector_store.search(rewritten_query, user_id=user_id, top_k=5)
+                es_docs = await self.es_service.search(rewritten_query, user_id=user_id, top_k=5)
+                try:
+                    graph_context = graph_service.graph_search(rewritten_query)
+                    print(f"🕸️ [Neo4j] 图谱检索找到 {len(graph_context)} 个字符的上下文")
+                except Exception as e:
+                    print(f"⚠️ 图谱检索跳过: {e}")
 
-        # 🌟 核心：调用本地模型重排，直接取前 3 名
-        top_docs = reranker_service.rerank(query=rewritten_query, docs=candidates, top_k=3)
+            # ================= 组装候选集与重排 =================
+            candidates = []
+            if vector_docs and es_docs:
+                print("--- 🧬 开始 RRF 融合 ---")
+                # 保留之前的动态权重逻辑
+                is_precision_query = len(re.findall(r'\d+', rewritten_query)) >= 3 or len(rewritten_query) < 10
+                weights = [0.5, 1.5] if is_precision_query else [1.5, 0.5]
+                fused_docs = reciprocal_rank_fusion([vector_docs, es_docs], weights=weights)
+                candidates = fused_docs[:10]
+            elif vector_docs:
+                candidates = vector_docs  # 纯语义模式，不需要融合
+            elif es_docs:
+                candidates = es_docs  # 纯精确模式，不需要融合
 
-        # 6. 组装上下文与溯源数据
-        context_str = ""
-        sources_data = []
+            top_docs = []
+            if candidates:
+                print(f"🔄 准备重排的候选集大小: {len(candidates)}")
+                top_docs = reranker_service.rerank(query=rewritten_query, docs=candidates, top_k=3)
+            else:
+                print("⚠️ 没有检索到任何相关文档")
 
-        for doc in top_docs:
-            page = doc.get('page', '未知')
-            content = doc.get('parent_content', '')
-            context_str += f"【第 {page} 页内容】\n{content}\n\n"
+            # ================= 组装上下文 =================
+            sources_data = []
+            for doc in top_docs:
+                page = doc.get('page', '未知')
+                content = doc.get('parent_content', '')
+                context_str += f"【第 {page} 页内容】\n{content}\n\n"
 
-            # 去重溯源信息
-            if not any(s['page'] == page for s in sources_data):
-                sources_data.append({
-                    "page": page,
-                    "content": content.strip()[:500] + "..."
-                })
+                if not any(s['page'] == page for s in sources_data):
+                    sources_data.append({
+                        "page": page,
+                        "content": content.strip()[:500] + "..."
+                    })
 
-        if graph_context:
-            context_str += f"【知识图谱关联信息】\n{graph_context}\n\n"
+            if graph_context:
+                context_str += f"【知识图谱关联信息】\n{graph_context}\n\n"
 
-        # 7. 终极 Prompt 组装
-        prompt = f"""你是一个极其专业的财务分析师。请严格根据提供的财报片段和图谱信息回答用户问题。
+            # ================= 7. 终极 Prompt 组装 =================
+            prompt = f"""你是一个极其专业的财务分析师。请严格根据提供的财报片段和图谱信息回答用户问题。
 注意：
 1. 如果片段中找不到答案，直接说“根据现有财报片段，无法回答该问题”。
 2. 绝不要编造数据。
 3. 必须在回答的结尾标注数据来源的页码（如：[第6页]）。
+4. 如果【财报及图谱信息】为空（比如用户在闲聊），请用你自身的知识友好地回答。
 
 【财报及图谱信息】：
 {context_str}
@@ -140,19 +161,24 @@ class RAGChain:
 {query}
 """
 
-        # 8. 流式输出
-        full_answer = ""
-        async for chunk in self.llm.chat_stream(prompt):
-            full_answer += chunk
-            yield chunk
+            # 8. 流式输出
+            full_answer = ""
+            async for chunk in self.llm.chat_stream(prompt):
+                full_answer += chunk
+                yield chunk
 
-        # 9. 推送溯源元数据给前端
-        meta_packet = json.dumps({"sources": sources_data}, ensure_ascii=False)
-        yield f"\n\n<<<SOURCES_METADATA>>>{meta_packet}<<<END_METADATA>>>"
+            # 🌟 修改 2：获取脱敏后的安全回答
+            safe_answer = guardrails.check_output(full_answer)
+            if safe_answer != full_answer:
+                yield f"\n\n⚠️ 注意：系统已对回答中的敏感隐私信息进行脱敏处理。"
 
-        # 10. 存入记忆 (Redis 和 SQLite/PG)
-        await chat_memory.add_message(user_id,session_id, "user", query)
-        await chat_memory.add_message(user_id,session_id, "assistant", full_answer)
+            # 9. 推送溯源元数据给前端
+            meta_packet = json.dumps({"sources": sources_data}, ensure_ascii=False)
+            yield f"\n\n<<<SOURCES_METADATA>>>{meta_packet}<<<END_METADATA>>>"
+
+            # 10. 存入记忆
+            await chat_memory.add_message(user_id, session_id, "user", query)
+            await chat_memory.add_message(user_id, session_id, "assistant", full_answer)
 
 
 rag_chain = RAGChain()

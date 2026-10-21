@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 services:
   # ---------------- 基础依赖层 ----------------
@@ -74,6 +74,7 @@ services:
       # 🌟 必须和 langfuse-server 项目里的 key 一致，否则上报 401/404、后台看不到数据
       - LANGFUSE_PUBLIC_KEY=pk-lf-7165d8d5-3028-4cbe-9b7d-d6814cace07c
       - LANGFUSE_SECRET_KEY=sk-lf-62ca472d-73c2-4502-b7c2-6bd53e5c8598
+      - RERANKER_URL=http://reranker-service:80/rerank
     ports:
       - "8001:8001"
     depends_on:
@@ -103,6 +104,7 @@ services:
       # 🌟 必须和 langfuse-server 项目里的 key 一致，否则上报 401/404、后台看不到数据
       - LANGFUSE_PUBLIC_KEY=pk-lf-7165d8d5-3028-4cbe-9b7d-d6814cace07c
       - LANGFUSE_SECRET_KEY=sk-lf-62ca472d-73c2-4502-b7c2-6bd53e5c8598
+      - RERANKER_URL=http://reranker-service:80/rerank
     depends_on:
       - backend
 
@@ -134,6 +136,15 @@ services:
       - LANGFUSE_PUBLIC_KEY=pk-lf-7165d8d5-3028-4cbe-9b7d-d6814cace07c
       - LANGFUSE_SECRET_KEY=sk-lf-62ca472d-73c2-4502-b7c2-6bd53e5c8598
     restart: unless-stopped
+
+  reranker-service:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: rag_reranker
+    ports:
+     - "8080:80" # 暴露 8080 端口
+    volumes:
+      - ./models:/data # 复用你之前下载的本地模型目录
+    command: --model-id /data/hub/models--BAAI--bge-reranker-base/snapshots/2cfc18c9415c912f9d8155881c133215df768a70 --port 80 # 注意替换为你实际的模型路径
 
 volumes:
   pg_data:

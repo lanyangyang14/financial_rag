@@ -17,8 +17,7 @@ llama-index-embeddings-openai
 llama-index-graph-stores-neo4j
 llama-index-llms-openai-like
 # 本地 Langfuse 服务端是 v2，SDK 必须用 v2 才会上报成功（v3+ 走 OTel，v2 服务端不支持）
-langfuse<3
-
+langfuse>=4.0.0
 # --- 检索与数据库 ---
 qdrant-client
 elasticsearch==8.13.0
@@ -29,7 +28,7 @@ SQLAlchemy
 # --- 文档解析与多模态 ---
 pymupdf
 pdfplumber
-sentence-transformers
+
 
 # --- 前端 (Streamlit) ---
 streamlit
@@ -37,3 +36,6 @@ requests
 
 langgraph
 langchain-openai
+slowapi
+pyjwt
+passlib[argon2]

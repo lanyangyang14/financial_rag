@@ -44,7 +44,7 @@ cp .env.example .env # 填入你的 DEEPSEEK_API_KEY
 uvicorn app.main:app --reload --port 8001
 
 # 启动 Celery Worker (新终端)
-celery -A app.tasks.celery_app.celery_app worker --loglevel=info -P solo
+celery -A app.tasks.celery_app.celery_app worker --loglevel=info -P solo -Q celery,graph_queue
 
 #启动前端UI
 streamlit run app_ui.py
@@ -57,3 +57,6 @@ LLM: DeepSeek API, Ollama (nomic-embed-text / llava)
 数据库: Qdrant (向量), Redis (缓存/队列), PostgreSQL
 
 文档解析: PyMuPDF, pdfplumber
+
+启动简单环境    .\start.bat
+启动完整环境 docker compose up -d postgres redis qdrant elasticsearch neo4j reranker-service backend celery_worker frontend

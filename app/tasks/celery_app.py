@@ -16,4 +16,11 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="Asia/Shanghai",
     enable_utc=True,
+    # 🌟 核心新增：开启 Redis 优先级支持
+    broker_transport_options={
+        'priority_steps': list(range(10)), # 支持 0-9 的优先级（0 最高）
+        'queue_order_strategy': 'priority',
+    },
+    # 让任务默认走优先级队列
+    task_default_queue='default',
 )

@@ -34,7 +34,7 @@ class ESSearchService:
             else:
                 print(f"⚠️ 创建 ES 索引时出错: {e}")
 
-    async def index_chunks(self, chunks: List[Dict[str, Any]], document_id: str,user_id:str):
+    async def index_chunks(self, chunks: List[Dict[str, Any]], document_id: str,user_id:str,chunk_type:str="text"):
         """将切片批量写入 ES"""
         operations = []
         for i, chunk in enumerate(chunks):
@@ -45,7 +45,8 @@ class ESSearchService:
                 "page": chunk["metadata"]["page"],
                 "document_id": document_id,
                 "parent_content": chunk["parent_content"],
-                "user_id":user_id
+                "user_id":user_id,
+                "chunk_type":chunk_type
             })
 
         if operations:
