@@ -60,3 +60,6 @@ LLM: DeepSeek API, Ollama (nomic-embed-text / llava)
 
 启动简单环境    .\start.bat
 启动完整环境 docker compose up -d postgres redis qdrant elasticsearch neo4j reranker-service backend celery_worker frontend
+
+查找端口冲突：netstat -ano | findstr :5601
+查找进程冲突：tasklist | findstr <那个PID>

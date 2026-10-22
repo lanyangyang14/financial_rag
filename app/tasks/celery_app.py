@@ -6,7 +6,7 @@ celery_app = Celery(
     "financial_worker",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.document_task"] # 注册任务文件
+    include=["app.tasks.document_task", "app.tasks.db_flush_task"],  # 注册新文件
 )
 
 # 基础配置
@@ -23,4 +23,11 @@ celery_app.conf.update(
     },
     # 让任务默认走优先级队列
     task_default_queue='default',
+    beat_schedule={
+        'flush-memory-every-second': {
+            'task': 'flush_memory_queue',
+            'schedule': 1.0,  # 每 1 秒执行一次
+        },
+    },
 )
+

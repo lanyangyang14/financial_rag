@@ -1,3 +1,5 @@
+import os
+
 from openai import AsyncOpenAI
 from app.core.config import settings
 from typing import AsyncGenerator
@@ -10,6 +12,10 @@ class LLMClient:
             self.client=AsyncOpenAI(
                 api_key=settings.DEEPSEEK_API_KEY,
                 base_url=settings.DEEPSEEK_BASE_URL,
+                default_headers={
+                    "x-langfuse-public-key":os.getenv("LANGUSE_PUBLIC_KEY"),
+                    "x-langfuse-secret-key":os.getenv("LANGUSE_SECRET_KEY"),
+                }if os.getenv("LANGUSE_PUBLIC_KEY") else None,
 
             )
             self.model="deepseek-chat"
@@ -29,7 +35,8 @@ class LLMClient:
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
-                temperature=0.1
+                temperature=0.1,
+                steam_options={"include_usage": True}
             )
             async for chunk in response:
                 content=chunk.choices[0].delta.content

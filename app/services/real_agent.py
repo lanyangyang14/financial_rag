@@ -15,6 +15,7 @@ class AgentState(TypedDict):
     feedback: str  # 🌟 共享黑板：存放审查者的修改意见
     iterations: int  # 防止死循环
     next_actor: str  # 决定下一个谁上场
+    user_id:str
 
 
 # ================= 2. 初始化带工具的大模型 =================

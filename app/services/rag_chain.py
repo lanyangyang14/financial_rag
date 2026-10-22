@@ -12,8 +12,9 @@ from app.services.es_search import ESSearchService
 from app.services.graph_service import graph_service
 from app.services.fusion import reciprocal_rank_fusion
 from app.services.llm_client import get_llm_client
-from app.services.memory import chat_memory
+from app.services.memory import cognitive_memory
 from app.services.query_router import router  # 🌟 引入极速路由器
+from app.services.context_manager import budget_manager
 
 langfuse = Langfuse(
     public_key=os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-lf-1234567890"),
@@ -65,9 +66,42 @@ class RAGChain:
                 user_id=user_id
         ):
 
-            # 1. 获取历史与查询改写
-            history_text = await chat_memory.get_history_text(session_id, user_id)
-            rewritten_query = await self.rewrite_query(query, history_text)
+            # 1. 获取全方位认知上下文（用户画像 + 摘要 + 近期对话）
+            memory_ctx = await cognitive_memory.get_memory_context(user_id, session_id)
+            procedural_exp=cognitive_memory.get_procedural_experience(query)
+            history_recall = ""
+
+            # 1. 只有当用户提问包含“指代词”时，才启动召回逻辑
+            if any(w in query for w in ["刚才", "之前", "我说过", "前面"]):
+                print("🔍 检测到指代词，启动漏斗召回...")
+
+                # 2. 第一层：查近期工作记忆（Redis）
+                # 注意：memory_ctx['working'] 就是最近的 Redis 消息
+                recent_history = memory_ctx['working']
+
+                # 如果近期对话不为空，直接把近期对话塞进去给大模型。
+                # 因为大模型很聪明，只要最近的上下文里有，它自己会找到。
+                if recent_history.strip():
+                    print("✅ [漏斗1] 近期 Redis 记忆中已包含上下文，无需调用向量库")
+                    history_recall = "【近期对话参考】\n" + recent_history + "\n\n"
+
+                # 3. 第二层：如果近期对话没找到（比如隔了100轮，Redis 被挤掉了），再去查 PG 摘要
+                # （通常摘要中已经包含了早期的核心事实，比向量检索成本低）
+                elif memory_ctx['summary'].strip():
+                    print("✅ [漏斗2] Redis 无记录，但 PG 摘要包含早期记忆，直接使用摘要")
+                    # 摘要已经在 memory_ctx['summary'] 中了，不需要额外拼装
+                    pass
+
+                # 4. 第三层：如果前两层都没有（真的是极度久远的具体细节），才允许去查向量库！
+                else:
+                    print("⚠️ [漏斗3] 缓存和摘要均未命中，触发高成本向量检索 (Qdrant)...")
+                    recalled_docs = await vector_store.search(query, user_id=user_id, top_k=2, chunk_type="history")
+                    if recalled_docs:
+                        history_recall = "【历史相关对话召回】\n" + "\n".join(
+                            [d["parent_content"] for d in recalled_docs]) + "\n\n"
+            # 2. 查询改写（使用近期对话）
+            rewritten_query = await self.rewrite_query(query, memory_ctx["working"])
+
             if rewritten_query != query:
                 print(f"🔄 查询改写: [{query}] -> [{rewritten_query}]")
 
@@ -106,6 +140,12 @@ class RAGChain:
                 except Exception as e:
                     print(f"⚠️ 图谱检索跳过: {e}")
 
+            safe_working, safe_context = budget_manager.build_final_context(
+                profile=memory_ctx['profile'],
+                summary=memory_ctx['summary'],
+                working=memory_ctx['working'],
+                retrieved_docs=context_str
+            )
             # ================= 组装候选集与重排 =================
             candidates = []
             if vector_docs and es_docs:
@@ -143,6 +183,7 @@ class RAGChain:
             if graph_context:
                 context_str += f"【知识图谱关联信息】\n{graph_context}\n\n"
 
+
             # ================= 7. 终极 Prompt 组装 =================
             prompt = f"""你是一个极其专业的财务分析师。请严格根据提供的财报片段和图谱信息回答用户问题。
 注意：
@@ -151,13 +192,19 @@ class RAGChain:
 3. 必须在回答的结尾标注数据来源的页码（如：[第6页]）。
 4. 如果【财报及图谱信息】为空（比如用户在闲聊），请用你自身的知识友好地回答。
 
-【财报及图谱信息】：
-{context_str}
+{memory_ctx['profile']}
+{memory_ctx['summary']}
+{history_recall}  <-- 被按需召回的历史
+{procedural_exp}
 
-【历史对话】：
-{history_text}
+请严格根据以下【财报信息】回答用户问题。必须标注页码。
+【财报信息】：
+{safe_context}  <-- 经过 Token 预算裁剪的片段
 
-【用户问题】：
+【近期对话】：
+{safe_working}  <-- 经过裁剪的近期对话
+
+【当前用户问题】：
 {query}
 """
 
@@ -177,8 +224,6 @@ class RAGChain:
             yield f"\n\n<<<SOURCES_METADATA>>>{meta_packet}<<<END_METADATA>>>"
 
             # 10. 存入记忆
-            await chat_memory.add_message(user_id, session_id, "user", query)
-            await chat_memory.add_message(user_id, session_id, "assistant", full_answer)
-
-
+            await cognitive_memory.add_message(user_id, session_id, "user", query)
+            await cognitive_memory.add_message(user_id, session_id, "assistant", full_answer)
 rag_chain = RAGChain()

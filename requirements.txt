@@ -24,6 +24,7 @@ elasticsearch==8.13.0
 psycopg2-binary
 neo4j
 SQLAlchemy
+alembic
 
 # --- 文档解析与多模态 ---
 pymupdf
@@ -39,3 +40,8 @@ langchain-openai
 slowapi
 pyjwt
 passlib[argon2]
+
+ python-docx
+ python-pptx
+ pandas
+ loguru

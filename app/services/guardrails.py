@@ -77,16 +77,27 @@ class SafetyGuardrails:
         return True, ""
 
     def check_output(self, answer: str) -> tuple[bool, str]:
-        """第三重防线：输出 PII 脱敏与拦截"""
+        """第三重防线：输出 PII 脱敏（加入白名单机制，防止误杀财报数据）"""
         safe_answer = answer
 
-        # 发现身份证、手机号、银行卡，直接替换为星号
+        # 🌟 核心升级：如果数字上下文带有“元/万元/亿”等财务单位，绝不脱敏
         for pii_type, pattern in self.pii_patterns.items():
-            if re.search(pattern, safe_answer):
-                safe_answer = re.sub(pattern, f"[已脱敏的{pii_type}]", safe_answer)
-                print(f"🛡️ [安全护栏] 触发 PII 脱敏: 发现了 {pii_type}")
+            if pii_type == "银行卡号":
+                # 只在有“卡号”、“账号”等字眼时脱敏
+                if re.search(r"(卡号|账号|账户)[^\d]*(\d{16,19})", safe_answer):
+                    safe_answer = re.sub(r"(卡号|账号|账户)([^\d]*)(\d{16,19})", r"\1\2[已脱敏的银行卡号]", safe_answer)
+            elif pii_type == "身份证号":
+                # 排除掉带财务单位的
+                if re.search(r"(身份证)[^\d]*(\d{17}[\dXx])", safe_answer):
+                    safe_answer = re.sub(r"(身份证)([^\d]*)(\d{17}[\dXx])", r"\1\2[已脱敏的身份证号]", safe_answer)
+            elif pii_type == "手机号":
+                # 手机号一般出现在特定上下文，如“联系电话”
+                if re.search(r"(电话|手机|联系方式)[^\d]*(\d{11})", safe_answer):
+                    safe_answer = re.sub(r"(电话|手机|联系方式)([^\d]*)(\d{11})", r"\1\2[已脱敏的手机号]", safe_answer)
+
+        if safe_answer != answer:
+            print(f"🛡️ [安全护栏] 触发 PII 脱敏（白名单上下文校验）")
 
         return safe_answer
-
 
 guardrails = SafetyGuardrails()
