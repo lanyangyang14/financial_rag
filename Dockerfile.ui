@@ -6,8 +6,9 @@ WORKDIR /app
 COPY requirements-ui.txt .
 RUN pip install --no-cache-dir -r requirements-ui.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 🌟 核心修改：只复制前端运行所需的文件，不要把整个项目复制进去
+# 🌟 核心修改：复制前端入口与多页面目录（st.Page 依赖 pages/ 下的文件，缺了会启动即报错）
 COPY app_ui.py .
+COPY pages ./pages
 
 EXPOSE 8501
 

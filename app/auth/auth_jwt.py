@@ -23,7 +23,12 @@ class AuthJWT(AuthConfig):
             if self.jwt_in_headers:
                 auth = req.headers.get(self._header_name.lower())
                 if auth:
-                    self._get_jwt_from_headers(auth)
+                    try:
+                        self._get_jwt_from_headers(auth)
+                    except InvalidHeaderError:
+                        # 🌟 请求头格式不合法时不在这里抛异常，交给 jwt_required() 统一返回 401，
+                        # 否则异常发生在依赖构造阶段，会变成 500 而不是 401
+                        self._token = None
 
     def _get_jwt_from_headers(self, auth: str) -> "AuthJWT":
         header_name, header_type = self._header_name, self._header_type

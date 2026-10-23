@@ -89,7 +89,8 @@ class AuthConfig:
     """接管全局状态的配置类"""
     _token = None
     _token_location = {'headers'}
-    _secret_key = None
+    # 🌟 直接取 settings.SECRET_KEY；此前依赖 load_config() 赋值，但它从未被调用，导致签发 token 时密钥为 None
+    _secret_key = settings.SECRET_KEY
     _algorithm = "HS256"
     _decode_algorithms = None
     _decode_leeway = 0

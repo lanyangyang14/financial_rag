@@ -19,7 +19,7 @@ else:
     DATABASE_URL += "?sslmode=disable&client_encoding=utf8"
 
 engine = create_engine(
-    settings.POSTGRES_URL,
+    DATABASE_URL,           # 必须用带 +psycopg2 驱动的地址，否则 SQLAlchemy 2.x 默认走 psycopg3
     pool_size=10,          # 平时保持 10 个常驻连接
     max_overflow=20,       # 高峰期最多再额外借 20 个（总共 30 个）
     pool_timeout=30,       # 借不到连接最多等 30 秒（超时直接抛错，保护数据库）

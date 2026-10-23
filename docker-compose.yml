@@ -59,22 +59,24 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-        - ./models:/app/models  # 🌟 挂载模型缓存目录
-        - ./data:/app/data      # 🌟 挂载我们之前写的 PDF 解析和上传目录
+      - ./models:/app/models
+      - ./data:/app/data
     environment:
       - POSTGRES_URL=postgresql://admin:adminpassword@postgres:5432/financial_rag
       - REDIS_URL=redis://redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - NEO4J_URL=bolt://neo4j:7687
       - ES_URL=http://elasticsearch:9200
-      # 注意：访问宿主机的 Ollama
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - LANGFUSE_HOST=http://langfuse-server:3000
-      # 🌟 必须和 langfuse-server 项目里的 key 一致，否则上报 401/404、后台看不到数据
       - LANGFUSE_PUBLIC_KEY=pk-lf-7165d8d5-3028-4cbe-9b7d-d6814cace07c
       - LANGFUSE_SECRET_KEY=sk-lf-62ca472d-73c2-4502-b7c2-6bd53e5c8598
       - RERANKER_URL=http://reranker-service:80/rerank
+      # 🌟 新增：把加密密钥和 SMTP 等配置传进来（如果你有的话）
+      - SMTP_EMAIL=${SMTP_EMAIL}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
     ports:
       - "8001:8001"
     depends_on:
@@ -89,8 +91,8 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-        - ./models:/app/models
-        - ./data:/app/data
+      - ./models:/app/models
+      - ./data:/app/data
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
     environment:
       - POSTGRES_URL=postgresql://admin:adminpassword@postgres:5432/financial_rag
@@ -101,10 +103,12 @@ services:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - LANGFUSE_HOST=http://langfuse-server:3000
-      # 🌟 必须和 langfuse-server 项目里的 key 一致，否则上报 401/404、后台看不到数据
       - LANGFUSE_PUBLIC_KEY=pk-lf-7165d8d5-3028-4cbe-9b7d-d6814cace07c
       - LANGFUSE_SECRET_KEY=sk-lf-62ca472d-73c2-4502-b7c2-6bd53e5c8598
       - RERANKER_URL=http://reranker-service:80/rerank
+      - SMTP_EMAIL=${SMTP_EMAIL}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
     depends_on:
       - backend
 
@@ -112,13 +116,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.ui
+    volumes:
+      - ./app_ui.py:/app/app_ui.py
+      - ./pages:/app/pages
     environment:
+      # 🌟 核心修复：告诉前端，后端在 Docker 里的名字叫 backend，端口是 8001
       - API_BASE_URL=http://backend:8001
     ports:
       - "8501:8501"
     depends_on:
       - backend
-
 
     # ---------------- 监控层：Langfuse ----------------
   langfuse-server:

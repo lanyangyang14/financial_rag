@@ -37,6 +37,8 @@ requests
 
 langgraph
 langchain-openai
+langchain-text-splitters
+tiktoken
 slowapi
 pyjwt
 passlib[argon2]
@@ -45,3 +47,5 @@ passlib[argon2]
  python-pptx
  pandas
  loguru
+ tavily-python
+ cryptography

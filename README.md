@@ -63,3 +63,9 @@ LLM: DeepSeek API, Ollama (nomic-embed-text / llava)
 
 查找端口冲突：netstat -ano | findstr :5601
 查找进程冲突：tasklist | findstr <那个PID>
+
+更新表以及迁移:alembic revision --autogenerate -m "add all new tables for platform"
+alembic upgrade head
+
+查看docker报错日志：docker compose logs -f frontend
+docker compose logs --tail 50 frontend

@@ -3,9 +3,9 @@ from typing import TypedDict, Annotated, Sequence, Literal
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
 from app.core.config import settings
 from app.services.agent_tools import financial_tools
+from app.services.tool_registry import tool_registry
 
 
 # ================= 1. 定义复杂的状态机（共享黑板） =================
@@ -22,7 +22,7 @@ class AgentState(TypedDict):
 # 只有 Executor 拥有工具权限，主管和审查者只有大脑
 base_llm = ChatOpenAI(model="deepseek-chat", api_key=settings.DEEPSEEK_API_KEY, base_url=settings.DEEPSEEK_BASE_URL,
                       temperature=0)
-llm_with_tools = base_llm.bind_tools(financial_tools)
+
 
 
 # ================= 3. 核心节点定义 =================
@@ -54,17 +54,26 @@ def supervisor_node(state: AgentState):
     else:
         print(f"⚠️ [Supervisor 收到 Critic 修改建议，打回给 Executor (当前迭代: {iterations})]")
         return {"next_actor": "executor"}
+
+
 def executor_node(state: AgentState):
     """🛠️ 执行者节点：调工具，干活"""
     print("🛠️ [Executor 正在查阅财报并提取数据...]")
     messages = state["messages"]
 
-    sys_prompt = SystemMessage(content="""你是一个底层财务数据提取员。请根据用户的需求或审查者的反馈，使用你的工具（查向量/查关键词）获取最准确的数据。
-你只需输出你查到的核心数据和引用的页码，不要做多余的分析。""")
+    # 🌟 核心修复 1：获取当前用户的专属工具列表
+    user_id = state.get("user_id", "default")
+    # 这里 tool_registry 应该根据 user_id 返回基础工具 + 该用户的自定义工具
+    available_tools = tool_registry.get_all_tools(user_id=user_id)
 
-    response = llm_with_tools.invoke([sys_prompt] + list(messages))
+    # 🌟 核心修复 2：动态绑定工具
+    current_llm = base_llm.bind_tools(available_tools)
 
-    # 把查到的核心数据存入共享黑板
+    sys_prompt = SystemMessage(content="""你是一个底层财务数据提取员...""")
+
+    # 🌟 核心修复 3：使用绑定好的 current_llm
+    response = current_llm.invoke([sys_prompt] + list(messages))
+
     return {
         "messages": [response],
         "research_data": response.content,
@@ -119,6 +128,51 @@ def critic_node(state: AgentState):
     }
 
 
+def dynamic_tool_node(state: AgentState):
+    """🌟 动态工具执行节点：执行大模型请求的工具调用"""
+    messages = state["messages"]
+    last_message = messages[-1]
+
+    if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
+        return {"messages": []}
+
+    user_id = state.get("user_id", "default")
+    available_tools = tool_registry.get_all_tools(user_id=user_id)
+    # 将工具列表转成字典，方便按名字查找
+    tools_map = {tool.name: tool for tool in available_tools}
+
+    tool_messages = []
+    for tool_call in last_message.tool_calls:
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
+        tool_id = tool_call["id"]
+
+        if tool_name in tools_map:
+            tool_func = tools_map[tool_name]
+            try:
+                # 执行工具
+                result = tool_func.invoke(tool_args)
+                tool_messages.append(ToolMessage(
+                    tool_call_id=tool_id,
+                    content=str(result),
+                    name=tool_name
+                ))
+            except Exception as e:
+                tool_messages.append(ToolMessage(
+                    tool_call_id=tool_id,
+                    content=f"工具执行报错: {e}",
+                    name=tool_name
+                ))
+        else:
+            tool_messages.append(ToolMessage(
+                tool_call_id=tool_id,
+                content=f"错误：找不到名为 {tool_name} 的工具",
+                name=tool_name
+            ))
+
+    return {"messages": tool_messages}
+
+
 # ================= 4. 构建图网络 =================
 def route_supervisor(state: AgentState) -> Literal["executor", "__end__"]:
     if state.get("next_actor") == "END":
@@ -138,10 +192,10 @@ workflow = StateGraph(AgentState)
 workflow.add_node("supervisor", supervisor_node)
 workflow.add_node("executor", executor_node)
 workflow.add_node("critic", critic_node)
-workflow.add_node("tools", ToolNode(financial_tools))  # 🌟 真正执行工具的地方
+# 🌟 替换掉 ToolNode
+workflow.add_node("tools", dynamic_tool_node)
 
 workflow.set_entry_point("supervisor")
-
 workflow.add_conditional_edges("supervisor", route_supervisor, {"executor": "executor", "__end__": END})
 workflow.add_conditional_edges("executor", route_executor, {"tools": "tools", "critic": "critic"})
 workflow.add_edge("tools", "executor")  # 工具执行完，把结果还给执行者

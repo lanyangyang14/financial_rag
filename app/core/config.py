@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEFAULT_LLM_PROVIDER: str = "deepseek"
 
+    # JWT 签名密钥（生产环境请通过环境变量 SECRET_KEY 覆盖）
+    SECRET_KEY: str = "financial-rag-jwt-secret-please-change"
+
     OLLAMA_BASE_URL: str = "https://localhost:11434"
     OLLAMA_MODEL:str="qwen2:7b"
 
